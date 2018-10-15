@@ -1,0 +1,212 @@
+#include <SPI.h>
+#include <Ethernet.h>
+#include <SoftwareSerial.h>
+
+SoftwareSerial softSerial(2, 3);                    //Configure Serial Communication 2-RX 3-TX
+
+#include "SparkFun_UHF_RFID_Reader.h"         //Library for controlling the M6E Nano module
+RFID nano; 											//Create instance
+
+# define BUZZER2 9
+# define BUZZER1 10
+bool buzzing = false;
+
+byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
+byte ip[] = {192,168,1,16};
+byte server[] = {192,168,1,2}; 
+
+char reading[13];
+
+// Initialize the Ethernet server library
+EthernetClient client;
+
+void setup()
+{
+  Serial.begin(9600);
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(BUZZER1, OUTPUT);
+  pinMode(BUZZER2, OUTPUT);
+  digitalWrite(BUZZER2, LOW);
+//Configure buzzer output
+  
+  while (!Serial); 									//Wait for the serial port to come online
+
+  if (setupNano(38400) == false) 					//Configure nano to run at 38400bps
+  {
+    Serial.println(F("Bad wiring."));
+  }
+
+  nano.setRegion(REGION_AUSTRALIA); 				//Set to North America
+
+  nano.setReadPower(2000); 							//5.00 dBm. Higher values may caues USB port to brown out
+													//Max Read TX Power is 27.00 dBm and may cause temperature-limit throttling
+  Serial.println(F("Press a key to begin scanning for tags."));
+  while (!Serial.available()); 						//Wait for user to send a character
+  Serial.read(); 									//Throw away the user's character
+
+  nano.startReading(); 								//Begin scanning for tags
+
+  
+  Ethernet.begin(mac, ip);
+  Serial.println("Enter any key to continue");
+}
+
+
+boolean setupNano(long baudRate)
+{
+  nano.begin(softSerial);               //Tell the library to communicate over software serial port
+
+                          //Test to see if we are already connected to a module
+                          //This would be the case if the Arduino has been reprogrammed and the module has stayed powered
+  softSerial.begin(baudRate);             //For this test, assume module is already at our desired baud rate
+  while(!softSerial);                 //Wait for port to open
+
+                          //About 200ms from power on the module will send its firmware version at 115200. We need to ignore this.
+  while(softSerial.available()) softSerial.read();
+  
+  nano.getVersion();
+
+  if (nano.msg[0] == ERROR_WRONG_OPCODE_RESPONSE)
+  {
+                            //This happens if the baud rate is correct but the module is doing a ccontinuous read
+    nano.stopReading();
+
+    Serial.println(F("Module continuously reading. Asking it to stop..."));
+
+    delay(1500);
+  }
+  else
+  {
+                            //The module did not respond so assume it's just been powered on and communicating at 115200bps
+    softSerial.begin(115200);             //Start software serial at 115200
+
+    nano.setBaud(baudRate);             //Tell the module to go to the chosen baud rate. Ignore the response msg
+
+    softSerial.begin(baudRate);           //Start the software serial port, this time at user's chosen baud rate
+  }
+
+                          //Test the connection
+  nano.getVersion();
+  if (nano.msg[0] != ALL_GOOD) return (false);    //Something is not right
+
+                          //The M6E has these settings no matter what
+  nano.setTagProtocol();              //Set protocol to GEN2
+
+  nano.setAntennaPort();              //Set TX/RX antenna ports to 1
+
+  return (true);                  //We are ready to rock
+}
+
+
+void highBeep()
+{
+  tone(BUZZER1, 2093, 100); //High 
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(100);
+  digitalWrite(LED_BUILTIN, LOW);
+  buzzing = false;
+}
+
+//void array_to_string(byte array[], unsigned int len, char buffer[])
+//{
+//    for (unsigned int i = 0; i < len; i++)
+//    {
+////        byte nib1 = (array[i] >> 4) & 0x0F;
+//        byte nib1 = array[i];//array[i] >> 0) & 0x0F;
+//        buffer[i] = nib1  < 0xA ? '0' + nib1  : 'A' + nib1  - 0xA;
+////        buffer[i*2+1] = nib2  < 0xA ? '0' + nib2  : 'A' + nib2  - 0xA;
+//    }
+//    buffer[len] = '\0';
+//}
+
+void loop()
+{
+  if (nano.check() == true) 						//Check to see if any new data has come in from module
+  {
+    byte responseType = nano.parseResponse(); 		//Break response into tag ID, RSSI, frequency, and timestamp
+
+    if (responseType == RESPONSE_IS_KEEPALIVE)
+    {
+      Serial.println(F("Scanning"));
+    }
+    else if (responseType == RESPONSE_IS_TAGFOUND)
+    {
+      /* Indication of tag detection */
+      if (buzzing == false) {
+        buzzing = true;
+        highBeep();
+        Serial.println("beep");                   
+      }  
+													//If we have a full record we can pull out the fun bits
+
+      byte tagEPCBytes = nano.getTagEPCBytes(); 	//Get the number of bytes of EPC from response
+      byte myByteArray[tagEPCBytes];
+				//Print EPC bytes to serial, this is a subsection of bytes from the response/msg array/]
+        /*
+      Serial.println();
+      Serial.print(F("GET /write_data.php?value="));
+      for (byte x = 0 ; x < tagEPCBytes ; x++)
+      {
+        if (nano.msg[31 + x] < 0x10) Serial.print(F("0")); //Pretty print
+        Serial.print(nano.msg[31 + x], HEX);
+//        Serial.print(F(" "));
+        myByteArray[x] = nano.msg[31 + x];
+      }
+      Serial.print(F(" HTTP/1.1"));
+      Serial.println();
+      Serial.print("Host: 192.168.1.2");
+      Serial.println();
+      Serial.print("Connection: close");
+      Serial.println();
+      Serial.println();   // New line
+
+      char str[13] = "";
+//      array_to_string(myByteArray, 12, str);
+      for (byte c = 0;c <=12;c++)
+      {
+       str[c] = (char)nano.msg[31 + c];
+       Serial.print(str[c],HEX);
+      }
+      str[13] = '\0';
+      Serial.println(str[13]);
+      */
+//      reading= str;
+      if (client.connect(server, 81)) {
+        client.print("GET /write_data.php?"); // This
+        client.print("value="); // This
+        for (byte x = 0 ; x < tagEPCBytes ; x++)
+        {
+          client.print((nano.msg[31 + x]));
+          client.print("a");
+        }
+        //client.print(str); // And this is what we did in the testing section above. We are making a GET request just like we would from our browser but now with live data from the sensor
+        client.println(" HTTP/1.1"); // Part of the GET request
+        client.println("Host: 192.168.1.2"); // IMPORTANT: If you are using XAMPP you will have to find out the IP address of your computer and put it here (it is explained in previous article). If you have a web page, enter its address (ie.Host: "www.yourwebpage.com")
+        client.println("Connection: close"); // Part of the GET request telling the server that we are over transmitting the message
+        client.println(); // Empty line
+        client.println(); // Empty line
+        client.stop();    // Closing connection to server
+        Serial.println("Sent byte");
+      }
+      else {
+        Serial.println("--> connection failed\n");
+      }
+    }
+    else if (responseType == ERROR_CORRUPT_RESPONSE)
+    {
+      Serial.println("Bad CRC");
+    }
+    else
+    {
+      Serial.print("Unknown error");				//Unknown response
+
+    }
+  }
+}
+
+													//Gracefully handles a reader that is already configured and already reading continuously
+													//Because Stream does not have a .begin() we have to do this outside the library
+
+
+
