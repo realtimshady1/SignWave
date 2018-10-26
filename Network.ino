@@ -1,84 +1,57 @@
 #include <SPI.h>
 #include <Ethernet.h>
 #include <SoftwareSerial.h>
-#include "SparkFun_UHF_RFID_Reader.h" 
+#include <RFIDReader.h> 
 
-SoftwareSerial softSerial(2, 3);               
-
-RFID nano;                  
-
-# define BUZZER2 9
-# define BUZZER1 8
-
+EthernetClient client;
 byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 byte ip[] = {192,168,1,16};
 byte server[] = {192,168,1,2}; 
-
+SoftwareSerial softSerial(2, 3);
+RFID nano;
 char tmp[16];
 
-EthernetClient client;
-
-void setup()
-{
+void setup() {
 	Serial.begin(9600);
 
+	setupNano(38400);
+	nano.setRegion(REGION_AUSTRALIA);   
+	nano.setReadPower(2000);
+	nano.startReading();              
+	Ethernet.begin(mac, ip);
+	
 	pinMode(LED_BUILTIN, OUTPUT);
 	pinMode(BUZZER1, OUTPUT);
 	pinMode(BUZZER2, OUTPUT);
 	digitalWrite(BUZZER2, LOW);
 
-	while (!Serial);          
-
-	if (setupNano(38400) == false)        
-	{
-	Serial.println(F("Bad wiring."));
-	}
-
-	nano.setRegion(REGION_AUSTRALIA);   
-
-	nano.setReadPower(2000);        
-	Serial.println(F("Press a key to begin scanning for tags."));
-	while (!Serial.available());         
-	Serial.read();                 
-
-	nano.startReading();              
-
-	Ethernet.begin(mac, ip);
-	Serial.println("Enter any key to continue");
 }
 
 
 boolean setupNano(long baudRate) {
   nano.begin(softSerial);            
-
-  softSerial.begin(baudRate);         
+  softSerial.begin(baudRate);  
+  
   while(!softSerial);              
-
   while(softSerial.available()) softSerial.read();
   
   nano.getVersion();
-
-  if (nano.msg[0] == ERROR_WRONG_OPCODE_RESPONSE)
-  {
+  if (nano.msg[0] == ERROR_WRONG_OPCODE_RESPONSE) {
     nano.stopReading();
-    Serial.println(F("Module continuously reading. Asking it to stop..."));
     delay(1500);
   }
-  else
-  {
+  else {
     softSerial.begin(115200);
-
     nano.setBaud(baudRate);
-
     softSerial.begin(baudRate); 
   }
+  
   nano.getVersion();
   if (nano.msg[0] != ALL_GOOD) return (false); 
   nano.setTagProtocol();
-
   nano.setAntennaPort();
-
   return (true);
+  
 }
 
 void loop() {
